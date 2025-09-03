@@ -1,0 +1,261 @@
+/* =============================================================
+   demographiKon Style Guide — CSS for Shiny/Quarto Apps
+   Includes full light/dark themes and all party color blocks
+   ============================================================= */
+
+/* Light and Dark Theme Variables */
+:root {
+  --bg-color: #f5f7f9;
+  --text-color: #2c3e50;
+  --primary-color: #3498db;
+  --header-color: #1a1a1a;
+  --table-header-bg: #3498db;
+  --table-header-text: white;
+  --card-bg: white;
+  --border-color: #ddd;
+}
+
+body.dark-mode {
+  --bg-color: #1e1e2f;
+  --text-color: #e0e0e0;
+  --primary-color: #2980b9;
+  --header-color: #ffffff;
+  --table-header-bg: #2c3e50;
+  --table-header-text: #ffffff;
+  --card-bg: #2a2a3a;
+  --border-color: #444;
+}
+
+/* Base layout */
+body {
+  font-family: 'Roboto', sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 20px;
+  transition: background-color 0.3s, color 0.3s;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 300;
+  color: var(--header-color);
+}
+
+h1 {
+  font-size: 2.4em;
+  border-bottom: 2px solid var(--primary-color);
+  padding-bottom: 10px;
+  margin-bottom: 20px;
+}
+
+h2 {
+  font-size: 1.8em;
+  margin-bottom: 15px;
+}
+
+/* Buttons */
+.btn-primary {
+  background-color: var(--text-color);
+  border-color: var(--text-color);
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #1a242f;
+}
+
+/* Navbar */
+.navbar {
+  background-color: var(--text-color);
+  border-bottom: 3px solid var(--primary-color);
+}
+
+.navbar-default .navbar-nav > li > a,
+.navbar-default .navbar-brand {
+  color: var(--table-header-text);
+}
+
+/* DataTables */
+.dataTable th {
+  background-color: var(--table-header-bg);
+  color: var(--table-header-text);
+  padding: 10px;
+  font-weight: 400;
+}
+
+.dataTable td {
+  border: 1px solid var(--border-color);
+  padding: 8px;
+}
+
+/* Card/Panel */
+.card, .well {
+  background-color: var(--card-bg);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+/* Inputs */
+input[type="text"],
+select,
+textarea {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 5px rgba(52, 152, 219, 0.4);
+}
+
+/* Footer */
+footer {
+  font-size: 0.85em;
+  text-align: center;
+  color: #7f8c8d;
+  padding: 20px;
+}
+
+/* Theme toggle button */
+.theme-toggle {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background-color: var(--primary-color);
+  color: white;
+  padding: 10px 15px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  z-index: 1000;
+}
+
+.theme-toggle:hover {
+  opacity: 0.85;
+}
+
+/* Party color styles — TEXT + BACKGROUND + HOVER */
+
+/* === UK === */
+.uk-labour-color { color: #d62c1a; }
+.uk-conservative-color { color: #00539f; }
+.uk-libdem-color { color: #fdbb30; }
+.uk-reform-color { color: #00B2A9; }
+.uk-snp-color { color: #1A2C4B; }
+.uk-plaid-color { color: #175E17; }
+.bg-uk-labour-color { background-color: #d62c1a; color: white; }
+.bg-uk-conservative-color { background-color: #00539f; color: white; }
+.bg-uk-libdem-color { background-color: #fdbb30; color: black; }
+.bg-uk-reform-color { background-color: #00B2A9; color: white; }
+.bg-uk-snp-color { background-color: #1A2C4B; color: white; }
+.bg-uk-plaid-color { background-color: #175E17; color: white; }
+
+/* === USA === */
+.usa-democrat-color { color: #2980b9; }
+.usa-republican-color { color: #c0392b; }
+.bg-usa-democrat-color { background-color: #2980b9; color: white; }
+.bg-usa-republican-color { background-color: #c0392b; color: white; }
+
+/* === Canada === */
+.canada-liberal-color { color: #D71920; }
+.canada-conservative-color { color: #1A4782; }
+.canada-ndp-color { color: #F37021; }
+.canada-green-color { color: #3D9B35; }
+.canada-bloc-color { color: #007FA3; }
+.bg-canada-liberal-color { background-color: #D71920; color: white; }
+.bg-canada-conservative-color { background-color: #1A4782; color: white; }
+.bg-canada-ndp-color { background-color: #F37021; color: white; }
+.bg-canada-green-color { background-color: #3D9B35; color: white; }
+.bg-canada-bloc-color { background-color: #007FA3; color: white; }
+
+/* === France === */
+.france-lfi-color { color: #B50035; }
+.france-ps-color { color: #DE1C31; }
+.france-eelv-color { color: #5BA300; }
+.france-lr-color { color: #002395; }
+.france-ensemble-color { color: #FFD700; }
+.france-rn-color { color: #0F4FA8; }
+.bg-france-lfi-color { background-color: #B50035; color: white; }
+.bg-france-ps-color { background-color: #DE1C31; color: white; }
+.bg-france-eelv-color { background-color: #5BA300; color: white; }
+.bg-france-lr-color { background-color: #002395; color: white; }
+.bg-france-ensemble-color { background-color: #FFD700; color: black; }
+.bg-france-rn-color { background-color: #0F4FA8; color: white; }
+
+/* === Germany === */
+.germany-spd-color { color: #E3000F; }
+.germany-cdu-color { color: #000000; }
+.germany-fdp-color { color: #FFCC00; }
+.germany-greens-color { color: #64A12D; }
+.germany-afd-color { color: #009EE0; }
+.germany-bsw-color { color: #E3000F; }
+.bg-germany-spd-color { background-color: #E3000F; color: white; }
+.bg-germany-cdu-color { background-color: #000000; color: white; }
+.bg-germany-fdp-color { background-color: #FFCC00; color: black; }
+.bg-germany-greens-color { background-color: #64A12D; color: white; }
+.bg-germany-afd-color { background-color: #009EE0; color: white; }
+.bg-germany-bsw-color { background-color: #E3000F; color: white; }
+
+/* === Italy === */
+.italy-pd-color { color: #E61B1D; }
+.italy-fdi-color { color: #003366; }
+.italy-lega-color { color: #0A6EBD; }
+.italy-m5s-color { color: #FFCC00; }
+.bg-italy-pd-color { background-color: #E61B1D; color: white; }
+.bg-italy-fdi-color { background-color: #003366; color: white; }
+.bg-italy-lega-color { background-color: #0A6EBD; color: white; }
+.bg-italy-m5s-color { background-color: #FFCC00; color: black; }
+
+/* === Spain === */
+.spain-psoe-color { color: #D5001F; }
+.spain-pp-color { color: #1D84CE; }
+.spain-vox-color { color: #63BE21; }
+.spain-sumar-color { color: #8300BF; }
+.bg-spain-psoe-color { background-color: #D5001F; color: white; }
+.bg-spain-pp-color { background-color: #1D84CE; color: white; }
+.bg-spain-vox-color { background-color: #63BE21; color: white; }
+.bg-spain-sumar-color { background-color: #8300BF; color: white; }
+
+/* === India === */
+.india-bjp-color { color: #FF9933; }
+.india-congress-color { color: #0080C0; }
+.india-aap-color { color: #004C94; }
+.india-cpi-color { color: #B22222; }
+.bg-india-bjp-color { background-color: #FF9933; color: black; }
+.bg-india-congress-color { background-color: #0080C0; color: white; }
+.bg-india-aap-color { background-color: #004C94; color: white; }
+.bg-india-cpi-color { background-color: #B22222; color: white; }
+
+/* === Japan === */
+.japan-ldp-color { color: #E60012; }
+.japan-cdp-color { color: #004098; }
+.japan-komeito-color { color: #FFD700; }
+.japan-ishin-color { color: #008000; }
+.japan-jcp-color { color: #B22222; }
+.japan-dpj-color { color: #0C234B; }
+.bg-japan-ldp-color { background-color: #E60012; color: white; }
+.bg-japan-cdp-color { background-color: #004098; color: white; }
+.bg-japan-komeito-color { background-color: #FFD700; color: black; }
+.bg-japan-ishin-color { background-color: #008000; color: white; }
+.bg-japan-jcp-color { background-color: #B22222; color: white; }
+.bg-japan-dpj-color { background-color: #0C234B; color: white; }
+
+/* === Australia === */
+.australia-labor-color { color: #DE3533; }
+.australia-liberal-color { color: #1C2A63; }
+.australia-greens-color { color: #3F9C35; }
+.australia-nationals-color { color: #006644; }
+.bg-australia-labor-color { background-color: #DE3533; color: white; }
+.bg-australia-liberal-color { background-color: #1C2A63; color: white; }
+.bg-australia-greens-color { background-color: #3F9C35; color: white; }
+.bg-australia-nationals-color { background-color: #006644; color: white; }
+
+/* Hover style */
+[class*=\"-color\"]:hover,
+[class*=\"bg-\"]:hover {
+  opacity: 0.85;
+}
