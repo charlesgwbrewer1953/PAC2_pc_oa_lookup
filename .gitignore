@@ -2,3 +2,10 @@
 .Rhistory
 .RData
 .Ruserdata
+*.json
+*.parquet
+*.csv
+data/
+.DS_Store
+*-credentials.json
+*-service-account.json
