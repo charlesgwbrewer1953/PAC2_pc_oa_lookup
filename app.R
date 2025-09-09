@@ -14,7 +14,7 @@ library(jsonlite)
 library(bigrquery)
 
 # =================== Constants ===================
-version_no <- "0.6.2"
+version_no <- "0.7.0"
 op_status  <- "DEV"
 
 AUTH_JSON <- "./data/astral-name-419808-ab8473ded5ad.json"
@@ -111,7 +111,7 @@ geo_name_col <- if ("pcon25nm" %in% names(geo_sf)) "pcon25nm" else {
 
 # =================== UI ===================
 ui <- fluidPage(
-  titlePanel("OA → PCON map + Postcodes (using st_as_sf logic)"),
+  titlePanel("OA locator → PCON map + Postcodes"),
   sidebarLayout(
     sidebarPanel(
       helpText("Enter a single OA code (exact). The app derives PCON, draws the constituency, and highlights the OA."),
@@ -152,6 +152,41 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$submit, {
+    # -----------------------------------------------------------
+    # Helpers (local to this observer)
+    # -----------------------------------------------------------
+    zoom_after_flush <- function(lng1, lat1, lng2, lat2) {
+      # sanity checks
+      vals <- c(lng1, lat1, lng2, lat2)
+      if (any(!is.finite(vals))) return(invisible(FALSE))
+      if (abs(lng2 - lng1) < 1e-8 || abs(lat2 - lat1) < 1e-8) return(invisible(FALSE))
+      # defer until leaflet has finished adding layers
+      session$onFlushed(function() {
+        leafletProxy("map") %>% fitBounds(lng1, lat1, lng2, lat2)
+        leafletProxy("map") %>% flyToBounds(lng1, lat1, lng2, lat2)
+      }, once = TRUE)
+      TRUE
+    }
+    
+    viewport_from_geom <- function(sf_geom, pad_frac = 0.15) {
+      # If polygon has area, use padded bbox; else 1.2km buffer around centroid
+      a <- suppressWarnings(as.numeric(sf::st_area(sf::st_union(sf_geom))))
+      if (is.finite(a) && a > 0) {
+        bb <- sf::st_bbox(sf_geom)
+        dx <- (bb["xmax"] - bb["xmin"]) * pad_frac
+        dy <- (bb["ymax"] - bb["ymin"]) * pad_frac
+        return(c(bb["xmin"] - dx, bb["ymin"] - dy, bb["xmax"] + dx, bb["ymax"] + dy))
+      }
+      ctr <- sf::st_centroid(sf::st_union(sf_geom))
+      ctrm <- sf::st_transform(ctr, 3857)
+      buf  <- sf::st_buffer(ctrm, dist = 1200)
+      bb   <- sf::st_bbox(sf::st_transform(buf, 4326))
+      c(bb["xmin"], bb["ymin"], bb["xmax"], bb["ymax"])
+    }
+    
+    # -----------------------------------------------------------
+    # Start fresh
+    # -----------------------------------------------------------
     oa_in <- trimws(input$oa_value)
     rv$log <- character(0)
     
@@ -166,7 +201,9 @@ server <- function(input, output, session) {
     }
     logit("OA input: ", oa_in)
     
-    # ---------- OA -> PCON ----------
+    # -----------------------------------------------------------
+    # OA -> PCON (from ED parquet)
+    # -----------------------------------------------------------
     ed_oa <- ed_slim %>% dplyr::filter(oa21cd == oa_in)
     logit("Rows in ED for OA: ", nrow(ed_oa))
     if (nrow(ed_oa) == 0) {
@@ -183,7 +220,9 @@ server <- function(input, output, session) {
       return()
     }
     
-    # ---------- Postcodes (BigQuery inline) ----------
+    # -----------------------------------------------------------
+    # Postcodes (BigQuery) — your exact inline logic via fetch_postcodes_bq()
+    # -----------------------------------------------------------
     pcs_vec <- fetch_postcodes_bq(oa_in)
     pcs_str <- if (length(pcs_vec)) paste(pcs_vec, collapse = ", ") else NA_character_
     results_rv(data.frame(OA = oa_in, PCON = sel_pcon, Postcodes = pcs_str, stringsAsFactors = FALSE))
@@ -192,9 +231,14 @@ server <- function(input, output, session) {
     })
     logit("Postcodes returned (n): ", length(pcs_vec))
     
-    # ========== Use geo_sf (ED_geoJSON_pcon.parquet) for EVERYTHING ==========
+    # -----------------------------------------------------------
+    # PCON polygon (union of all rows in geo_sf for this code)
+    # -----------------------------------------------------------
+    # Diagnostics summary
+    logit("geo_sf: class = ", paste(class(geo_sf), collapse = "/"))
+    logit("geo_sf: nrow = ", nrow(geo_sf), ", names = ", paste(utils::head(names(geo_sf), 8), collapse = ", "))
+    logit("geo_sf: has pcon25cd? ", "pcon25cd" %in% names(geo_sf), ", has oa21cd? ", "oa21cd" %in% names(geo_sf))
     
-    # 1) PCON rows -> union multipolygon
     geo_rows <- geo_sf %>% dplyr::filter(pcon25cd == sel_pcon)
     logit("Geo rows matched in constituency parquet: ", nrow(geo_rows))
     if (nrow(geo_rows) == 0) {
@@ -204,12 +248,11 @@ server <- function(input, output, session) {
       return()
     }
     
-    # bbox before union (debug)
+    # Union & draw PCON
     bb_before <- sf::st_bbox(geo_rows)
-    logit(sprintf("Matched PCON bbox BEFORE union: [%.6f, %.6f, %.6f, %.6f]",
+    logit(sprintf("PCON bbox BEFORE union: [%.6f, %.6f, %.6f, %.6f]",
                   bb_before["xmin"], bb_before["ymin"], bb_before["xmax"], bb_before["ymax"]))
     
-    # union
     geo_rows$geometry <- sf::st_make_valid(geo_rows$geometry)
     pcon_union <- sf::st_union(geo_rows)
     if (inherits(pcon_union, "sfc_GEOMETRYCOLLECTION")) {
@@ -217,15 +260,18 @@ server <- function(input, output, session) {
     }
     pcon_sf <- sf::st_as_sf(data.frame(pcon25cd = sel_pcon, stringsAsFactors = FALSE), geometry = pcon_union)
     
-    # label
+    bb_after <- sf::st_bbox(pcon_sf)
+    logit(sprintf("PCON bbox AFTER union:  [%.6f, %.6f, %.6f, %.6f]",
+                  bb_after["xmin"], bb_after["ymin"], bb_after["xmax"], bb_after["ymax"]))
+    
     pcon_label <- if ("pcon25nm" %in% names(geo_rows)) {
       geo_rows$pcon25nm[ which.max(sf::st_area(geo_rows)) ]
     } else sel_pcon
-    logit("PCON label used in popup: ", ifelse(is.na(pcon_label), "<NA>", as.character(pcon_label)))
+    logit("PCON label: ", ifelse(is.na(pcon_label), "<NA>", as.character(pcon_label)))
     
-    # draw PCON underlay
     leafletProxy("map") |>
-      clearShapes() |> clearMarkers() |>
+      clearShapes() |>
+      clearMarkers() |>
       addPolygons(
         data = pcon_sf,
         weight = 1, opacity = 0.9, fillOpacity = 0.20,
@@ -239,11 +285,14 @@ server <- function(input, output, session) {
       )
     logit("PCON polygon drawn (union).")
     
-    # 2) OA boundaries inside this PCON — directly from geo_sf
+    # -----------------------------------------------------------
+    # OA boundaries from geo_sf (all OAs in this PCON)
+    # -----------------------------------------------------------
     oa_in_pcon <- geo_sf %>% dplyr::filter(pcon25cd == sel_pcon)
-    logit("OA boundary candidates (from geo_sf) for this PCON: ", nrow(oa_in_pcon))
+    logit("OA boundary candidates (geo_sf) for PCON: ", nrow(oa_in_pcon))
+    
     if (nrow(oa_in_pcon) > 0) {
-      # outline only (thin)
+      # draw as thin outlines
       leafletProxy("map") |>
         addPolylines(
           data = oa_in_pcon,
@@ -252,16 +301,21 @@ server <- function(input, output, session) {
         )
       logit("OA boundaries drawn from geo_sf.")
     } else {
-      logit("No OA rows for this PCON in geo_sf (unexpected given earlier counts).")
+      logit("No OA rows for this PCON in geo_sf (unexpected).")
     }
     
-    # 3) Selected OA polygon — directly from geo_sf
+    # -----------------------------------------------------------
+    # Selected OA polygon (from geo_sf) + Deferrred Zoom
+    # -----------------------------------------------------------
     zoom_done <- FALSE
-    sel_oa_poly <- geo_sf %>% dplyr::filter(oa21cd == oa_in) %>% dplyr::slice_head(n = 1)
+    sel_oa_poly <- geo_sf %>%
+      dplyr::filter(oa21cd == oa_in) %>%
+      dplyr::slice_head(n = 1)
     logit("Selected OA rows in geo_sf: ", nrow(sel_oa_poly))
     
     if (nrow(sel_oa_poly) == 1) {
       sel_oa_poly$geometry <- sf::st_make_valid(sel_oa_poly$geometry)
+      
       leafletProxy("map") |>
         addPolygons(
           data = sel_oa_poly,
@@ -274,20 +328,22 @@ server <- function(input, output, session) {
           ),
           group = "oa_selected"
         )
-      # zoom tight to OA polygon
-      bb  <- sf::st_bbox(sel_oa_poly)
-      dx  <- (bb["xmax"] - bb["xmin"]) * 0.15
-      dy  <- (bb["ymax"] - bb["ymin"]) * 0.15
-      leafletProxy("map") |>
-        fitBounds(lng1 = bb["xmin"] - dx, lat1 = bb["ymin"] - dy,
-                  lng2 = bb["xmax"] + dx, lat2 = bb["ymax"] + dy)
-      zoom_done <- TRUE
-      logit("Selected OA polygon highlighted & zoomed.")
+      
+      vp <- viewport_from_geom(sel_oa_poly)
+      ok <- zoom_after_flush(vp[1], vp[2], vp[3], vp[4])
+      if (isTRUE(ok)) {
+        zoom_done <- TRUE
+        logit("Selected OA highlighted & zoomed (deferred).")
+      } else {
+        logit("Viewport invalid after OA polygon; will try centroid/PCON.")
+      }
     } else {
       logit("Selected OA not found as polygon in geo_sf; will try centroid/PCON.")
     }
     
-    # 4) Fallback zoom: OA centroid (~1.2 km) → PCON bbox
+    # -----------------------------------------------------------
+    # Fallback: OA centroid (~1.2 km) → PCON bbox
+    # -----------------------------------------------------------
     if (!zoom_done && !is.null(lat_col) && !is.null(lon_col) &&
         !is.na(ed_oa[[lat_col]][1]) && !is.na(ed_oa[[lon_col]][1])) {
       
@@ -306,20 +362,25 @@ server <- function(input, output, session) {
           group = "oa_point"
         )
       
+      # 1.2 km viewport around centroid
       pt  <- sf::st_sfc(sf::st_point(c(sel_lon, sel_lat)), crs = 4326)
       ptm <- sf::st_transform(pt, 3857); buf <- sf::st_buffer(ptm, dist = 1200)
       bb  <- sf::st_bbox(sf::st_transform(buf, 4326))
-      leafletProxy("map") |>
-        fitBounds(lng1 = bb["xmin"], lat1 = bb["ymin"], lng2 = bb["xmax"], lat2 = bb["ymax"])
-      zoom_done <- TRUE
-      logit("OA centroid drawn & zoomed to ~1.2 km box.")
+      ok  <- zoom_after_flush(bb["xmin"], bb["ymin"], bb["xmax"], bb["ymax"])
+      if (isTRUE(ok)) {
+        zoom_done <- TRUE
+        logit("OA centroid drawn & zoomed (deferred).")
+      }
     }
     
     if (!zoom_done) {
       bb <- sf::st_bbox(pcon_sf)
-      leafletProxy("map") |>
-        fitBounds(lng1 = bb["xmin"], lat1 = bb["ymin"], lng2 = bb["xmax"], lat2 = bb["ymax"])
-      logit("Zoomed to PCON bbox.")
+      ok <- zoom_after_flush(bb["xmin"], bb["ymin"], bb["xmax"], bb["ymax"])
+      if (isTRUE(ok)) {
+        logit("Zoomed to PCON bbox (deferred).")
+      } else {
+        logit("Fallback zoom failed sanity checks; leaving current view.")
+      }
     }
   })
   
