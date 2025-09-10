@@ -13,7 +13,7 @@ library(jsonlite)
 library(bigrquery)
 
 # =================== Constants ===================
-version_no <- "0.9.1"
+version_no <- "0.9.2"
 op_status  <- "DEV"
 
 AUTH_JSON <- "./data/astral-name-419808-ab8473ded5ad.json"
@@ -278,33 +278,42 @@ session$onFlushed(function() {
   
   # ---------------------- main action ----------------------
   observeEvent(input$submit, {
-    # --- reset
+    # --- read and reset ---
     oa_in <- trimws(input$oa_value)
-    leafletProxy("map") %>% clearShapes() %>% clearMarkers()
+    
+    # clear just the relevant groups so a new OA redraws cleanly
+    proxy <- leafletProxy("map") %>%
+      clearGroup("pcon") %>%
+      clearGroup("oa_boundaries") %>%
+      clearGroup("oa_selected") %>%
+      clearGroup("oa_point")
+    
     if (oa_in == "" || is.na(oa_in)) {
       showNotification("Enter a single OA code (oa21cd).", type = "warning")
       return()
     }
     
-    # --- (1) Postcodes: keep your existing logic exactly
+    # --- (1) Postcodes: exactly as before ---
     pcs_vec <- fetch_postcodes_bq(oa_in)
     pcs_str <- if (length(pcs_vec)) paste(pcs_vec, collapse = ", ") else NA_character_
-    # Find PCON for table display (from ED parquet)
+    
+    # get PCON for table from ED parquet
     ed_row <- dplyr::filter(ed_slim, oa21cd == oa_in)
     pcon   <- if (nrow(ed_row)) ed_row$pcon25cd[1] else NA_character_
+    
     results_rv(data.frame(OA = oa_in, PCON = pcon, Postcodes = pcs_str, stringsAsFactors = FALSE))
     output$postcodes_ui <- renderUI({
       if (!is.na(pcs_str)) tagList(tags$strong("Postcodes: "), tags$span(pcs_str))
       else tags$em("No postcodes returned.")
     })
     
-    # --- guard
+    # --- guard ---
     if (is.na(pcon)) {
       showNotification("PCON not found for this OA.", type = "error")
       return()
     }
     
-    # --- (2) All OA geometries in PCON + selected OA
+    # --- (2) OA geometries in this PCON + selected OA ---
     pcon_oas <- dplyr::filter(geo_sf, pcon25cd == pcon)
     if (nrow(pcon_oas) == 0) {
       showNotification(paste("No geometry for PCON:", pcon), type = "error")
@@ -315,21 +324,20 @@ session$onFlushed(function() {
     sel_oa <- dplyr::filter(pcon_oas, oa21cd == oa_in) |> dplyr::slice_head(n = 1)
     if (nrow(sel_oa) == 1) sel_oa$geometry <- sf::st_make_valid(sel_oa$geometry)
     
-    # --- (3) PCON union polygon
+    # --- (3) PCON union polygon ---
     pcon_union <- suppressWarnings(sf::st_union(pcon_oas))
     if (inherits(pcon_union, "sfc_GEOMETRYCOLLECTION"))
       pcon_union <- sf::st_collection_extract(pcon_union, "POLYGON")
     pcon_sf <- sf::st_as_sf(data.frame(pcon25cd = pcon), geometry = pcon_union)
-    
-    proxy <- leafletProxy("map")
     
     # Draw PCON (light fill)
     proxy %>% addPolygons(
       data = pcon_sf,
       group = "pcon",
       color = "#2b8cbe", weight = 1, opacity = 0.9,
-      fillColor = "#a6cee3", fillOpacity = 0.15,
-      popup = ~paste0("<b>PCON:</b> ", htmltools::htmlEscape(pcon))
+      fillColor = "#a6cee3", fillOpacity = 0.3,
+      popup = ~paste0("<b>OA:</b> ", htmltools::htmlEscape(oa_in),
+                      "<br><b>PCON:</b> ", htmltools::htmlEscape(pcon))
     )
     
     # OA boundaries (thin grey lines)
@@ -350,24 +358,49 @@ session$onFlushed(function() {
                         "<br><b>PCON:</b> ", htmltools::htmlEscape(pcon))
       )
       
-      # --- (4) Zoom: OA bbox (padded) → fallback to OA interior point → PCON bbox
-      bb <- suppressWarnings(tryCatch(sf::st_bbox(sel_oa), error = function(e) c(xmin=NA,ymin=NA,xmax=NA,ymax=NA)))
+      # Pre-compute targets now so they’re captured in the onFlushed closure
+      bb  <- suppressWarnings(tryCatch(sf::st_bbox(sel_oa), error = function(e) c(xmin=NA,ymin=NA,xmax=NA,ymax=NA)))
+      ctr <- poly_point_lonlat(sel_oa)
+      
+      
       if (all(is.finite(bb))) {
         bbp <- pad_bbox(bb, 0.10)
+        logit(sprintf("Leaflet zoom strategy: OA bounding box - bounds [%.6f, %.6f, %.6f, %.6f], zoom: fitBounds", 
+                      bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"]))
+        session$sendCustomMessage("leafletInvalidate", list())
         proxy %>% fitBounds(bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"])
       } else {
         ctr <- poly_point_lonlat(sel_oa)
-        if (is.finite(ctr[1]) && is.finite(ctr[2])) {
-          proxy %>% setView(lng = ctr[1], lat = ctr[2], zoom = 13)
-        } else {
-          bbp <- sf::st_bbox(pcon_sf)
-          proxy %>% fitBounds(bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"])
-        }
-      }
+        # Defer the zoom until after Shiny flushes the draw commands
+        session$onFlushed(function() {
+          if (all(is.finite(bb))) {
+            bbp <- pad_bbox(bb, 0.10)
+            logit(sprintf("Leaflet zoom (onFlushed): OA bbox [%.6f, %.6f, %.6f, %.6f] → fitBounds",
+                          bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"]))
+            session$sendCustomMessage("leafletInvalidate", list())
+            leafletProxy("map") %>% fitBounds(bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"])
+          } else if (is.finite(ctr[1]) && is.finite(ctr[2])) {
+            logit(sprintf("Leaflet zoom (onFlushed): OA center lng=%.6f lat=%.6f z=13 → setView",
+                          ctr[1], ctr[2]))
+            session$sendCustomMessage("leafletInvalidate", list())
+            leafletProxy("map") %>% setView(lng = ctr[1], lat = ctr[2], zoom = 13)
+          } else {
+            bbp <- sf::st_bbox(pcon_sf)
+            logit(sprintf("Leaflet zoom (onFlushed): PCON fallback %s bbox [%.6f, %.6f, %.6f, %.6f] → fitBounds",
+                          as.character(pcon), bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"]))
+            session$sendCustomMessage("leafletInvalidate", list())
+            leafletProxy("map") %>% fitBounds(bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"])
+          }
+        }, once = TRUE)}
     } else {
       # No OA polygon (unexpected) → PCON bbox
       bbp <- sf::st_bbox(pcon_sf)
-      proxy %>% fitBounds(bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"])
+      session$onFlushed(function() {
+        logit(sprintf("Leaflet zoom (onFlushed): No OA polygon → PCON %s bbox [%.6f, %.6f, %.6f, %.6f] → fitBounds",
+                      as.character(pcon), bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"]))
+        session$sendCustomMessage("leafletInvalidate", list())
+        leafletProxy("map") %>% fitBounds(bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"])
+      }, once = TRUE)
     }
   })
 }
