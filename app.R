@@ -4,16 +4,18 @@
 
 # =================== Libraries ===================
 library(shiny)
+library(shinyjs)
 library(googleCloudStorageR)
 library(arrow)
 library(dplyr)
+library(stringr)
 library(sf)
 library(leaflet)
 library(jsonlite)
 library(bigrquery)
 
 # =================== Constants ===================
-version_no <- "0.9.17"
+version_no <- "0.9.19"
 op_status  <- "DEV"
 
 AUTH_JSON <- "./data/astral-name-419808-ab8473ded5ad.json"
@@ -52,7 +54,14 @@ must_have_col <- function(df, colname) {
   colname
 }
 
-# Inline-BQ postcode lookup
+# Normalise a postcode: uppercase and remove spaces
+normalize_postcode <- function(x) {
+  x <- trimws(x)
+  x <- toupper(x)
+  gsub("\\s+", "", x)
+}
+
+# Inline-BQ: OA -> Postcodes
 fetch_postcodes_bq <- function(oa_code) {
   query <- paste0(
     "SELECT pcd2 FROM `", BQ_PROJECT, ".", BQ_DATASET, ".", BQ_TABLE, "` ",
@@ -64,6 +73,24 @@ fetch_postcodes_bq <- function(oa_code) {
     if (nrow(df) > 0) sort(unique(df$pcd2)) else character(0)
   }, error = function(e) {
     warning(paste("Error executing BigQuery for", oa_code, ":", e$message))
+    character(0)
+  })
+}
+
+# Inline-BQ: Postcode -> OA (match on pcd2 ignoring spaces / case)
+fetch_oa_by_postcode <- function(postcode_raw) {
+  pcd <- normalize_postcode(postcode_raw)
+  if (!nzchar(pcd)) return(character(0))
+  query <- paste0(
+    "SELECT DISTINCT oa21 FROM `", BQ_PROJECT, ".", BQ_DATASET, ".", BQ_TABLE, "` ",
+    "WHERE REPLACE(UPPER(pcd2), ' ', '') = '", pcd, "'"
+  )
+  tryCatch({
+    job <- bigrquery::bq_project_query(BQ_PROJECT, query)
+    df  <- bigrquery::bq_table_download(job)
+    if (nrow(df) > 0) unique(df$oa21) else character(0)
+  }, error = function(e) {
+    warning(paste("Error executing BigQuery for postcode", postcode_raw, ":", e$message))
     character(0)
   })
 }
@@ -110,15 +137,16 @@ ui <- fluidPage(
   titlePanel("OA locator → PCON map + Postcodes"),
   sidebarLayout(
     sidebarPanel(
-      helpText("Enter a single OA code (exact). The app derives PCON, draws the constituency, and highlights the OA*."),
-      textInput("oa_value", "OA code:", value = "", placeholder = "e.g. E00092757"),
-      actionButton("submit", "Run"),
+      useShinyjs(),
+      textInput(
+        inputId = "postcode",
+        label   = "Enter Postcode (no spaces)",
+        placeholder = "e.g. SW1A1AA"
+      ),
+      helpText("If a postcode is entered, the app will first find the OA for that postcode."),
+      textInput("oa_value", "or enter OA code directly:", value = "", placeholder = "e.g. E00092757"),
+      actionButton("run_lookup", "Run", icon = icon("play")),
       tags$hr(),
-    #  uiOutput("postcodes_ui"),
-      tags$hr(),
-     
-    # h4("Diagnostics"),
-    #  verbatimTextOutput("diag"),
       helpText("* Due to the highly variable size of OAs, it may be necessary to resize manually. Use the + / - box to do this.")
     ),
     mainPanel(
@@ -131,8 +159,6 @@ ui <- fluidPage(
 )
 
 # =================== Server ===================
-# =================== Server ===================
-# =================== Server ===================
 server <- function(input, output, session) {
   ## ---------------- diagnostics ----------------
   rv <- reactiveValues(log = character(0))
@@ -142,6 +168,16 @@ server <- function(input, output, session) {
     message(msg)
   }
   output$diag <- renderText(paste(rv$log, collapse = "\n"))
+  
+  ## Disable OA field whenever postcode has content; re-enable when cleared
+  observe({
+    pc_now <- normalize_postcode(input$postcode)
+    if (nzchar(pc_now)) {
+      shinyjs::disable("oa_value")
+    } else {
+      shinyjs::enable("oa_value")
+    }
+  })
   
   ## ---------------- helpers ----------------
   pad_bbox <- function(bb, frac = 0.10) {
@@ -160,7 +196,7 @@ server <- function(input, output, session) {
     g <- sf::st_geometry(sfx)
     if (any(sf::st_is_empty(g))) return(NULL)
     
-    # Clean up geometry a bit (doesn't need to be perfect)
+    # Clean up geometry 
     g <- tryCatch(sf::st_make_valid(g), error = function(e) g)
     g <- tryCatch(sf::st_collection_extract(g, "POLYGON"), error = function(e) g)
     g <- tryCatch(sf::st_zm(g, drop = TRUE, what = "ZM"), error = function(e) g)
@@ -205,7 +241,7 @@ server <- function(input, output, session) {
   output$results <- renderTable(results_rv(), rownames = FALSE)
   output$postcodes_ui <- renderUI(NULL)
   
-  # Base map: build once, no onFlushed, no forced invalidation
+  # Base map: build once
   output$map <- renderLeaflet({
     leaflet(options = leafletOptions(zoomControl = TRUE)) %>%
       addTiles() %>%
@@ -226,8 +262,29 @@ server <- function(input, output, session) {
   })
   
   ## ---------------- main action ----------------
-  observeEvent(input$submit, {
-    oa_in <- trimws(input$oa_value)
+  observeEvent(input$run_lookup, {
+    # Decide input source
+    oa_in <- NA_character_
+    pc_raw <- input$postcode
+    pc_norm <- normalize_postcode(pc_raw)
+    
+    if (nzchar(pc_norm)) {
+      # Postcode path: find OA, then proceed
+      oas <- fetch_oa_by_postcode(pc_norm)
+      logit("Postcode input: ", pc_norm, " | OA candidates: ", length(oas))
+      if (length(oas) == 0) {
+        showNotification("No OA found for that postcode.", type = "error")
+        return()
+      }
+      if (length(oas) > 1) {
+        showNotification(sprintf("Multiple OAs matched postcode; using the first (%s).", oas[1]), type = "message")
+      }
+      oa_in <- oas[1]
+      updateTextInput(session, "oa_value", value = oa_in)
+    } else {
+      # OA path: use OA field
+      oa_in <- trimws(input$oa_value)
+    }
     
     # Clear previous layers (not the base map)
     proxy <- leafletProxy("map") %>%
@@ -240,12 +297,12 @@ server <- function(input, output, session) {
     output$postcodes_ui <- renderUI(NULL)
     
     if (oa_in == "" || is.na(oa_in)) {
-      showNotification("Enter a single OA code (oa21cd).", type = "warning")
+      showNotification("Enter an OA code or a postcode.", type = "warning")
       return()
     }
-    logit("OA input: ", oa_in)
+    logit("OA input (effective): ", oa_in)
     
-    # (1) Postcodes — your working BQ logic
+    # (1) Postcodes — existing BQ logic
     pcs_vec <- fetch_postcodes_bq(oa_in)
     pcs_str <- if (length(pcs_vec)) paste(pcs_vec, collapse = ", ") else NA_character_
     logit("Postcodes returned (n): ", length(pcs_vec))
@@ -309,17 +366,13 @@ server <- function(input, output, session) {
         )
     }
     
-    ## (4) compute zoom target(s) now (plain R values), then apply immediately
-    # Prefer OA bbox; fallback to centroid; finally PCON bbox
-    zoom_done <- FALSE
-    # --- (4) Zoom SEPARATELY using robust centroid-buffer box ---
-    zb <- oa_zoom_box(sel_oa, meters = 2000)   # ~1 km box; adjust if you want tighter/looser
+    ## (4) Zoom logic (unchanged; robust centroid buffer, fallback to PCON bbox)
+    zb <- oa_zoom_box(sel_oa, meters = 2000)
     if (!is.null(zb) && all(is.finite(zb))) {
       logit(sprintf("Zoom (OA centroid-buffer): [%.6f, %.6f, %.6f, %.6f]", zb[1], zb[2], zb[3], zb[4]))
       session$sendCustomMessage("leafletInvalidate", list())
       proxy %>% fitBounds(zb[1], zb[2], zb[3], zb[4])
     } else {
-      # Fall back to PCON bbox if OA buffer fails for any reason
       bbp <- sf::st_bbox(pcon_sf)
       logit(sprintf("Zoom fallback (PCON bbox): [%.6f, %.6f, %.6f, %.6f]",
                     bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"]))
