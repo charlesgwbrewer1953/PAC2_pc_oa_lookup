@@ -53,9 +53,11 @@ library(sf)
 library(leaflet)
 library(jsonlite)
 library(bigrquery)
+library(leaflet.extras)
+
 
 # =================== Constants ===================
-version_no <- "0.9.19"
+version_no <- "0.10.0"
 op_status  <- "DEV"
 
 AUTH_JSON <- "./data/astral-name-419808-ab8473ded5ad.json"
@@ -286,6 +288,15 @@ server <- function(input, output, session) {
     leaflet(options = leafletOptions(zoomControl = TRUE)) %>%
       addTiles() %>%
       setView(lng = -1.8, lat = 52.8, zoom = 6) %>%  # UK-ish start
+      addDrawToolbar(
+        targetGroup = "draw",
+        editOptions = editToolbarOptions(selectedPathOptions = selectedPathOptions()),
+        polylineOptions  = drawPolylineOptions(shapeOptions = drawShapeOptions(weight = 2)),
+        polygonOptions   = drawPolygonOptions(showArea = TRUE, shapeOptions = drawShapeOptions(fillOpacity = 0.2)),
+        rectangleOptions = drawRectangleOptions(shapeOptions = drawShapeOptions(fillOpacity = 0.2)),
+        circleOptions = FALSE,
+        markerOptions = FALSE
+      ) %>%
       addLayersControl(
         overlayGroups = c("pcon", "oa_boundaries", "oa_selected"),
         options = layersControlOptions(collapsed = FALSE)
