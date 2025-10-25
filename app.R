@@ -1,3 +1,43 @@
+###############################################################################
+# Demographikon OA → PCON Lookup and Map Tool
+# ---------------------------------------------------------------------------
+# Purpose:
+#   This Shiny application allows users to look up Output Areas (OAs) and
+#   their associated Parliamentary Constituencies (PCONs) using either an OA
+#   code or a postcode.  The app displays the relevant PCON boundary and the
+#   selected OA on an interactive leaflet map.
+#
+# Data sources:
+#   • Local parquet files (downloaded from Google Cloud Storage) containing
+#     OA → PCON mappings and constituency geometries.
+#   • BigQuery table (PAC_PC_Xref_5_2024) providing OA ↔ Postcode references.
+#
+# Core workflow:
+#   1. User enters either a postcode or an OA code.
+#   2. The app retrieves matching records from BigQuery (if postcode given)
+#      and looks up the OA’s PCON using the ED parquet.
+#   3. The corresponding PCON boundary and OA polygon are drawn on a leaflet
+#      map, with optional postcode list and zoom-to-fit logic.
+#
+# Key interactive features:
+#   • Adjustable OA fill opacity (slider control).
+#   • Drawing tools (leaflet.extras) for user annotations on the map.
+#   • “Print / Save Map” option exporting the current map view to a PNG
+#     image using htmlwidgets + webshot2.
+#
+# Notes:
+#   – OA fill opacity can be changed in real time.
+#   – Drawn lines/polygons remain on the map and are included in exports.
+#   – Exported PNGs omit OA fill (zero opacity) and include a label box
+#     showing OA and PCON identifiers.
+#
+# Version : 0.9.21 (DEV)
+# Author  : [Your Name or Team]
+# Date    : [Current Date]
+###############################################################################
+
+
+
 # OA_Postcode_Map — Single OA → PCON map + BQ Postcodes
 # Version: 0.9.1
 # Status : DEV
@@ -352,7 +392,7 @@ server <- function(input, output, session) {
         data = pcon_oas,
         group = "oa_boundaries",
         color = "#666666", weight = 1, opacity = 0.8
-      )
+      ) 
     
     if (nrow(sel_oa) == 1) {
       leafletProxy("map") %>%
