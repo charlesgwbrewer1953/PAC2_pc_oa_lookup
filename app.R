@@ -463,6 +463,7 @@ server <- function(input, output, session) {
   
   # ---------------- Print selected OA map ----------------
   # ---------------- Print selected OA map (tight crop, no PCON fill) ----------------
+  # ---------------- Print selected OA map (use exact OA bounding box) ----------------
   output$print_map <- downloadHandler(
     filename = function() {
       df <- try(results_rv(), silent = TRUE)
@@ -475,16 +476,13 @@ server <- function(input, output, session) {
       sel  <- selected_data$sel_oa
       pcon <- selected_data$pcon_sf
       
-      # ensure WGS84 CRS
+      # Ensure WGS84
       if (is.na(sf::st_crs(sel)))  sf::st_crs(sel)  <- 4326
       if (is.na(sf::st_crs(pcon))) sf::st_crs(pcon) <- 4326
       
-      # Tight bounding box around OA (small buffer, ~250 m)
-      zb <- oa_zoom_box(sel, meters = 250)
-      if (is.null(zb) || any(!is.finite(zb))) {
-        bb <- sf::st_bbox(sel)
-        zb <- as.numeric(bb[c("xmin","ymin","xmax","ymax")])
-      }
+      # === Exact OA bounding box (no buffer) ===
+      bb <- sf::st_bbox(sel)
+      zb <- as.numeric(bb[c("xmin","ymin","xmax","ymax")])
       
       # Title text
       df <- try(results_rv(), silent = TRUE)
@@ -494,20 +492,20 @@ server <- function(input, output, session) {
         "OA / PCON map"
       }
       
-      # Printable leaflet map
+      # Build export map — PCON outline only, OA outline only
       export_map <- leaflet(options = leafletOptions(zoomControl = FALSE, attributionControl = FALSE)) %>%
         addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
         addPolygons(
           data = pcon,
           group = "pcon",
           color = "#2b8cbe", weight = 2, opacity = 1.0,
-          fillColor = "#ffffff", fillOpacity = 0.0       # ← no fill for PCON
+          fillColor = "#ffffff", fillOpacity = 0.0     # no fill for PCON
         ) %>%
         addPolygons(
           data = sel,
           group = "oa_selected",
           color = "#d7301f", weight = 3, opacity = 1.0,
-          fillColor = "#fdae61", fillOpacity = 0.0       # ← zero fill for OA
+          fillColor = "#fdae61", fillOpacity = 0.0     # no fill for OA
         ) %>%
         addControl(
           html = sprintf(
@@ -519,7 +517,7 @@ server <- function(input, output, session) {
         ) %>%
         fitBounds(zb[1], zb[2], zb[3], zb[4])
       
-      # Save and render
+      # Save and export PNG
       tmp_html <- tempfile(fileext = ".html")
       htmlwidgets::saveWidget(export_map, tmp_html, selfcontained = TRUE)
       webshot2::webshot(tmp_html, file = file, vwidth = 1200, vheight = 900, delay = 2, zoom = 2)
