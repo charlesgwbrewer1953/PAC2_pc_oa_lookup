@@ -194,6 +194,7 @@ ui <- fluidPage(
         min = 0, max = 1, value = 0.45, step = 0.05
       ),
       actionButton("run_lookup", "Run", icon = icon("play")),
+      downloadButton("print_map", "Print / Save OA Map"),
       tags$hr(),
       helpText("* Due to the highly variable size of OAs, it may be necessary to resize manually. Use the + / - box to do this.")
     ),
@@ -206,7 +207,7 @@ ui <- fluidPage(
   )
 )
 
-# =================== Server ===================
+
 # =================== Server ===================
 server <- function(input, output, session) {
   ## ---------------- diagnostics ----------------
@@ -459,6 +460,68 @@ server <- function(input, output, session) {
       }
     })
   })
+  
+  # ---------------- Print selected OA map ----------------
+  output$print_map <- downloadHandler(
+    filename = function() {
+      df <- try(results_rv(), silent = TRUE)
+      oa <- if (!inherits(df, "try-error") && nrow(df) > 0 && nzchar(df$OA[1])) df$OA[1] else "OA"
+      pcon <- if (!inherits(df, "try-error") && nrow(df) > 0 && nzchar(df$PCON[1])) df$PCON[1] else "PCON"
+      paste0("OA_", oa, "_print_", format(Sys.Date(), "%Y%m%d"), ".png")
+    },
+    content = function(file) {
+      req(selected_data$sel_oa, selected_data$pcon_sf)
+      
+      sel  <- selected_data$sel_oa
+      pcon <- selected_data$pcon_sf
+      
+      # Ensure CRS is WGS84
+      if (is.na(sf::st_crs(sel)))  sf::st_crs(sel)  <- 4326
+      if (is.na(sf::st_crs(pcon))) sf::st_crs(pcon) <- 4326
+      
+      # Compute tight bounds around OA (2 km pad)
+      zb <- oa_zoom_box(sel, meters = 2000)
+      if (is.null(zb) || any(!is.finite(zb))) {
+        bb <- sf::st_bbox(pcon)
+        zb <- as.numeric(bb[c("xmin","ymin","xmax","ymax")])
+      }
+      
+      # Title box text
+      df <- try(results_rv(), silent = TRUE)
+      title_text <- if (!inherits(df, "try-error") && nrow(df) > 0) {
+        sprintf("PCON: %s   |   OA: %s", df$PCON[1], df$OA[1])
+      } else {
+        "PCON / OA map"
+      }
+      
+      # Build printable leaflet map (OA fill opacity = 0)
+      export_map <- leaflet(options = leafletOptions(zoomControl = FALSE, attributionControl = FALSE)) %>%
+        addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
+        addPolygons(
+          data = pcon,
+          group = "pcon",
+          color = "#2b8cbe", weight = 1, opacity = 0.9,
+          fillColor = "#a6cee3", fillOpacity = 0.3
+        ) %>%
+        addPolygons(
+          data = sel,
+          group = "oa_selected",
+          color = "#d7301f", weight = 3, opacity = 1.0,
+          fillColor = "#fdae61", fillOpacity = 0.0
+        ) %>%
+        addControl(
+          html = sprintf("<div style='background:white;padding:8px;font-size:14px;font-weight:bold;border-radius:6px;'>
+                       %s</div>", htmltools::htmlEscape(title_text)),
+          position = "topleft"
+        ) %>%
+        fitBounds(zb[1], zb[2], zb[3], zb[4])
+      
+      # Save and capture PNG
+      tmp_html <- tempfile(fileext = ".html")
+      htmlwidgets::saveWidget(export_map, tmp_html, selfcontained = TRUE)
+      webshot2::webshot(tmp_html, file = file, vwidth = 1400, vheight = 1000, delay = 2, zoom = 2)
+    }
+  )
 }
 
 # =================== Run ===================
