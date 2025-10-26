@@ -518,9 +518,34 @@ server <- function(input, output, session) {
         fitBounds(zb[1], zb[2], zb[3], zb[4])
       
       # Save and export PNG
+      # Save HTML widget and capture after all tiles are loaded
       tmp_html <- tempfile(fileext = ".html")
       htmlwidgets::saveWidget(export_map, tmp_html, selfcontained = TRUE)
-      webshot2::webshot(tmp_html, file = file, vwidth = 1200, vheight = 900, delay = 2, zoom = 2)
+      
+      # --- Improved screenshot: allow more render time + zoom padding ---
+      # delay: wait longer for tile load (3–5 sec)
+      # zoom: slightly enlarges capture to ensure edges included
+      capture_map <- function(output_file, delay_time = 4) {
+        webshot2::webshot(
+          tmp_html,
+          file = output_file,
+          vwidth = 1300,
+          vheight = 950,
+          delay = delay_time,  # wait for tiles
+          zoom = 2.2,
+          cliprect = "viewport"
+        )
+      }
+      # First attempt
+      capture_map(file, delay_time = 4)
+      
+      # Check image size; if too small, retry (tiles likely missing)
+      info <- tryCatch(file.info(file)$size, error = function(e) 0)
+      if (is.na(info) || info < 20000) {
+        message("First capture too small — retrying with longer delay...")
+        capture_map(file, delay_time = 6)
+      }
+      
     }
   )
 }
