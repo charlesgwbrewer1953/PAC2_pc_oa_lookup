@@ -462,11 +462,11 @@ server <- function(input, output, session) {
   })
   
   # ---------------- Print selected OA map ----------------
+  # ---------------- Print selected OA map (tight crop, no PCON fill) ----------------
   output$print_map <- downloadHandler(
     filename = function() {
       df <- try(results_rv(), silent = TRUE)
       oa <- if (!inherits(df, "try-error") && nrow(df) > 0 && nzchar(df$OA[1])) df$OA[1] else "OA"
-      pcon <- if (!inherits(df, "try-error") && nrow(df) > 0 && nzchar(df$PCON[1])) df$PCON[1] else "PCON"
       paste0("OA_", oa, "_print_", format(Sys.Date(), "%Y%m%d"), ".png")
     },
     content = function(file) {
@@ -475,51 +475,54 @@ server <- function(input, output, session) {
       sel  <- selected_data$sel_oa
       pcon <- selected_data$pcon_sf
       
-      # Ensure CRS is WGS84
+      # ensure WGS84 CRS
       if (is.na(sf::st_crs(sel)))  sf::st_crs(sel)  <- 4326
       if (is.na(sf::st_crs(pcon))) sf::st_crs(pcon) <- 4326
       
-      # Compute tight bounds around OA (2 km pad)
-      zb <- oa_zoom_box(sel, meters = 2000)
+      # Tight bounding box around OA (small buffer, ~250 m)
+      zb <- oa_zoom_box(sel, meters = 250)
       if (is.null(zb) || any(!is.finite(zb))) {
-        bb <- sf::st_bbox(pcon)
+        bb <- sf::st_bbox(sel)
         zb <- as.numeric(bb[c("xmin","ymin","xmax","ymax")])
       }
       
-      # Title box text
+      # Title text
       df <- try(results_rv(), silent = TRUE)
       title_text <- if (!inherits(df, "try-error") && nrow(df) > 0) {
         sprintf("PCON: %s   |   OA: %s", df$PCON[1], df$OA[1])
       } else {
-        "PCON / OA map"
+        "OA / PCON map"
       }
       
-      # Build printable leaflet map (OA fill opacity = 0)
+      # Printable leaflet map
       export_map <- leaflet(options = leafletOptions(zoomControl = FALSE, attributionControl = FALSE)) %>%
         addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
         addPolygons(
           data = pcon,
           group = "pcon",
-          color = "#2b8cbe", weight = 1, opacity = 0.9,
-          fillColor = "#a6cee3", fillOpacity = 0.3
+          color = "#2b8cbe", weight = 2, opacity = 1.0,
+          fillColor = "#ffffff", fillOpacity = 0.0       # ← no fill for PCON
         ) %>%
         addPolygons(
           data = sel,
           group = "oa_selected",
           color = "#d7301f", weight = 3, opacity = 1.0,
-          fillColor = "#fdae61", fillOpacity = 0.0
+          fillColor = "#fdae61", fillOpacity = 0.0       # ← zero fill for OA
         ) %>%
         addControl(
-          html = sprintf("<div style='background:white;padding:8px;font-size:14px;font-weight:bold;border-radius:6px;'>
-                       %s</div>", htmltools::htmlEscape(title_text)),
+          html = sprintf(
+            "<div style='background:white;padding:8px 12px;font-size:14px;font-weight:bold;
+                       border-radius:6px;box-shadow:1px 1px 3px rgba(0,0,0,0.3);'>
+             %s
+           </div>", htmltools::htmlEscape(title_text)),
           position = "topleft"
         ) %>%
         fitBounds(zb[1], zb[2], zb[3], zb[4])
       
-      # Save and capture PNG
+      # Save and render
       tmp_html <- tempfile(fileext = ".html")
       htmlwidgets::saveWidget(export_map, tmp_html, selfcontained = TRUE)
-      webshot2::webshot(tmp_html, file = file, vwidth = 1400, vheight = 1000, delay = 2, zoom = 2)
+      webshot2::webshot(tmp_html, file = file, vwidth = 1200, vheight = 900, delay = 2, zoom = 2)
     }
   )
 }
