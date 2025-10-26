@@ -227,6 +227,15 @@ server <- function(input, output, session) {
     }
   })
   
+  
+  ##------------- Reactive variables -------------
+  # Debounced OA opacity (updates ~0.5s after user stops sliding)
+  oa_opacity_reactive <- reactive({
+    input$oa_opacity
+  }) %>% debounce(500)
+  
+  selected_data <- reactiveValues(sel_oa = NULL, pcon_sf = NULL)
+  
   ## ---------------- helpers ----------------
   pad_bbox <- function(bb, frac = 0.10) {
     bb <- as.numeric(bb); names(bb) <- c("xmin","ymin","xmax","ymax")
@@ -417,11 +426,15 @@ server <- function(input, output, session) {
           data = sel_oa,
           group = "oa_selected",
           color = "#d7301f", weight = 3, opacity = 1.0,
-          fillColor = "#fdae61", fillOpacity = 0.45,
+          fillColor = "#fdae61", fillOpacity = oa_opacity_reactive(),
           popup = ~paste0("<b>OA:</b> ", htmltools::htmlEscape(oa_in),
                           "<br><b>PCON:</b> ", htmltools::htmlEscape(pcon))
         )
+      
+      
     }
+    
+    
     
     ## (4) Zoom logic (unchanged; robust centroid buffer, fallback to PCON bbox)
     zb <- oa_zoom_box(sel_oa, meters = 2000)
@@ -438,6 +451,29 @@ server <- function(input, output, session) {
     }
   })
 }
+
+# When opacity changes (after debounce), update OA polygon fill
+observe({
+  # Wait until OA layer exists
+  op <- oa_opacity_reactive()
+  proxy <- leafletProxy("map")
+  
+  # Remove old OA polygon and redraw with new opacity
+  isolate({
+    sel_oa <- try(selected_data$sel_oa, silent = TRUE)
+    if (!inherits(sel_oa, "try-error") && !is.null(sel_oa) && nrow(sel_oa) == 1) {
+      proxy %>%
+        clearGroup("oa_selected") %>%
+        addPolygons(
+          data = sel_oa,
+          group = "oa_selected",
+          color = "#d7301f", weight = 3, opacity = 1.0,
+          fillColor = "#fdae61", fillOpacity = op,
+          popup = ~paste0("<b>OA:</b> ", htmltools::htmlEscape(oa21cd))
+        )
+    }
+  })
+})
 
 # =================== Run ===================
 shinyApp(ui, server)
