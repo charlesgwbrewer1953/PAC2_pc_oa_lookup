@@ -187,6 +187,12 @@ ui <- fluidPage(
       ),
       helpText("If a postcode is entered, the app will first find the OA for that postcode."),
       textInput("oa_value", "or enter OA code directly:", value = "", placeholder = "e.g. E00092757"),
+      # ADD: OA opacity slider
+      sliderInput(
+        inputId = "oa_opacity",
+        label   = "OA fill opacity",
+        min = 0, max = 1, value = 0.45, step = 0.05
+      ),
       actionButton("run_lookup", "Run", icon = icon("play")),
       tags$hr(),
       helpText("* Due to the highly variable size of OAs, it may be necessary to resize manually. Use the + / - box to do this.")
