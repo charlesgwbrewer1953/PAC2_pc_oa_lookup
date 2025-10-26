@@ -54,6 +54,9 @@ library(leaflet)
 library(jsonlite)
 library(bigrquery)
 library(leaflet.extras)
+library(mapview)
+library(webshot)
+library(webshot2)
 
 
 # =================== Constants ===================
@@ -464,6 +467,7 @@ server <- function(input, output, session) {
   # ---------------- Print selected OA map ----------------
   # ---------------- Print selected OA map (tight crop, no PCON fill) ----------------
   # ---------------- Print selected OA map (use exact OA bounding box) ----------------
+  # ---------------- Print selected OA map (using mapview for better tile handling) ----------------
   output$print_map <- downloadHandler(
     filename = function() {
       df <- try(results_rv(), silent = TRUE)
@@ -492,20 +496,33 @@ server <- function(input, output, session) {
         "OA / PCON map"
       }
       
-      # Build export map — PCON outline only, OA outline only
+      # Build export map using leaflet directly (mapview-compatible style)
+      # PCON outline only, OA outline only (no fills)
       export_map <- leaflet(options = leafletOptions(zoomControl = FALSE, attributionControl = FALSE)) %>%
-        addProviderTiles(leaflet::providers$CartoDB.Positron) %>%
+        addProviderTiles(
+          leaflet::providers$CartoDB.Positron,
+          options = providerTileOptions(
+            maxZoom = 19,
+            minZoom = 1
+          )
+        ) %>%
         addPolygons(
           data = pcon,
           group = "pcon",
-          color = "#2b8cbe", weight = 2, opacity = 1.0,
-          fillColor = "#ffffff", fillOpacity = 0.0     # no fill for PCON
+          color = "#2b8cbe", 
+          weight = 2, 
+          opacity = 1.0,
+          fillColor = "#ffffff", 
+          fillOpacity = 0.0     # no fill for PCON
         ) %>%
         addPolygons(
           data = sel,
           group = "oa_selected",
-          color = "#d7301f", weight = 3, opacity = 1.0,
-          fillColor = "#fdae61", fillOpacity = 0.0     # no fill for OA
+          color = "#d7301f", 
+          weight = 3, 
+          opacity = 1.0,
+          fillColor = "#fdae61", 
+          fillOpacity = 0.0     # no fill for OA
         ) %>%
         addControl(
           html = sprintf(
@@ -517,35 +534,60 @@ server <- function(input, output, session) {
         ) %>%
         fitBounds(zb[1], zb[2], zb[3], zb[4])
       
-      # Save and export PNG
-      # Save HTML widget and capture after all tiles are loaded
-      tmp_html <- tempfile(fileext = ".html")
-      htmlwidgets::saveWidget(export_map, tmp_html, selfcontained = TRUE)
-      
-      # --- Improved screenshot: allow more render time + zoom padding ---
-      # delay: wait longer for tile load (3–5 sec)
-      # zoom: slightly enlarges capture to ensure edges included
-      capture_map <- function(output_file, delay_time = 4) {
-        webshot2::webshot(
-          tmp_html,
-          file = output_file,
-          vwidth = 1300,
-          vheight = 950,
-          delay = delay_time,  # wait for tiles
-          zoom = 2.2,
-          cliprect = "viewport"
-        )
+      # Use mapshot for better tile handling (requires mapview package)
+      if (requireNamespace("mapview", quietly = TRUE)) {
+        tryCatch({
+          mapview::mapshot(
+            export_map,
+            file = file,
+            remove_controls = c("zoomControl", "layersControl", "homeButton", "scaleBar"),
+            vwidth = 1300,
+            vheight = 950,
+            delay = 3  # mapshot handles tiles more reliably
+          )
+        }, error = function(e) {
+          # Fallback to webshot2 if mapshot fails
+          message("mapshot failed, falling back to webshot2: ", e$message)
+          tmp_html <- tempfile(fileext = ".html")
+          htmlwidgets::saveWidget(export_map, tmp_html, selfcontained = TRUE)
+          webshot2::webshot(
+            tmp_html,
+            file = file,
+            vwidth = 1300,
+            vheight = 950,
+            delay = 15,
+            zoom = 2.2,
+            cliprect = "viewport"
+          )
+        })
+      } else {
+        # Fallback if mapview not installed - use improved webshot2
+        message("mapview package not available, using webshot2")
+        tmp_html <- tempfile(fileext = ".html")
+        htmlwidgets::saveWidget(export_map, tmp_html, selfcontained = TRUE)
+        
+        capture_map <- function(output_file, delay_time = 15) {
+          webshot2::webshot(
+            tmp_html,
+            file = output_file,
+            vwidth = 1300,
+            vheight = 950,
+            delay = delay_time,
+            zoom = 2.2,
+            cliprect = "viewport"
+          )
+        }
+        
+        # First attempt with longer delay
+        capture_map(file, delay_time = 15)
+        
+        # Check image size; if too small, retry with even longer delay
+        info <- tryCatch(file.info(file)$size, error = function(e) 0)
+        if (is.na(info) || info < 50000) {
+          message("First capture too small — retrying with 20s delay...")
+          capture_map(file, delay_time = 20)
+        }
       }
-      # First attempt
-      capture_map(file, delay_time = 4)
-      
-      # Check image size; if too small, retry (tiles likely missing)
-      info <- tryCatch(file.info(file)$size, error = function(e) 0)
-      if (is.na(info) || info < 20000) {
-        message("First capture too small — retrying with longer delay...")
-        capture_map(file, delay_time = 6)
-      }
-      
     }
   )
 }
