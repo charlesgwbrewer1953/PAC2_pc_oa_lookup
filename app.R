@@ -207,6 +207,7 @@ ui <- fluidPage(
 )
 
 # =================== Server ===================
+# =================== Server ===================
 server <- function(input, output, session) {
   ## ---------------- diagnostics ----------------
   rv <- reactiveValues(log = character(0))
@@ -227,13 +228,13 @@ server <- function(input, output, session) {
     }
   })
   
-  
   ##------------- Reactive variables -------------
   # Debounced OA opacity (updates ~0.5s after user stops sliding)
   oa_opacity_reactive <- reactive({
     input$oa_opacity
   }) %>% debounce(500)
   
+  # store selected geometries for later export or updates
   selected_data <- reactiveValues(sel_oa = NULL, pcon_sf = NULL)
   
   ## ---------------- helpers ----------------
@@ -318,7 +319,7 @@ server <- function(input, output, session) {
       )
   })
   
-  # Optional client diagnostics; safe
+  # Optional client diagnostics
   observeEvent(input$map_bounds, ignoreInit = TRUE, {
     b <- input$map_bounds
     logit(sprintf("Leaflet moved: [%.6f, %.6f, %.6f, %.6f]", b$west, b$south, b$east, b$north))
@@ -348,11 +349,10 @@ server <- function(input, output, session) {
       oa_in <- oas[1]
       updateTextInput(session, "oa_value", value = oa_in)
     } else {
-      # OA path: use OA field
       oa_in <- trimws(input$oa_value)
     }
     
-    # Clear previous layers (not the base map)
+    # Clear previous layers
     proxy <- leafletProxy("map") %>%
       clearGroup("pcon") %>%
       clearGroup("oa_boundaries") %>%
@@ -368,26 +368,22 @@ server <- function(input, output, session) {
     }
     logit("OA input (effective): ", oa_in)
     
-    # (1) Postcodes — existing BQ logic
+    # (1) Postcodes
     pcs_vec <- fetch_postcodes_bq(oa_in)
     pcs_str <- if (length(pcs_vec)) paste(pcs_vec, collapse = ", ") else NA_character_
     logit("Postcodes returned (n): ", length(pcs_vec))
     
-    # OA -> PCON from ED parquet
+    # (2) OA -> PCON lookup
     ed_row <- dplyr::filter(ed_slim, oa21cd == oa_in)
     logit("Rows in ED for OA: ", nrow(ed_row))
     if (nrow(ed_row) == 0) { showNotification("OA not found in ED parquet.", type = "error"); return() }
     pcon <- ed_row$pcon25cd[1]
-    if (is.na(pcon)) { showNotification("PCON (pcon25cd) missing for this OA.", type = "error"); return() }
+    if (is.na(pcon)) { showNotification("PCON missing for this OA.", type = "error"); return() }
     logit("Derived PCON25CD: ", pcon)
     
     results_rv(data.frame(OA = oa_in, PCON = pcon, Postcodes = pcs_str, stringsAsFactors = FALSE))
-    output$postcodes_ui <- renderUI({
-      if (!is.na(pcs_str)) tagList(tags$strong("Postcodes: "), tags$span(pcs_str))
-      else tags$em("No postcodes returned.")
-    })
     
-    # (2) OA geometries within this PCON + selected OA
+    # (3) Geo filter and draw
     pcon_oas <- dplyr::filter(geo_sf, pcon25cd == pcon)
     logit("Geo rows matched in constituency parquet: ", nrow(pcon_oas))
     if (nrow(pcon_oas) == 0) { showNotification(paste("No geometry for PCON:", pcon), type = "error"); return() }
@@ -399,7 +395,7 @@ server <- function(input, output, session) {
     logit("Selected OA rows in geo_sf: ", nrow(sel_oa))
     if (nrow(sel_oa) == 1) sel_oa$geometry <- sf::st_make_valid(sel_oa$geometry)
     
-    # (3) PCON union + draw
+    # union PCON
     pcon_union <- suppressWarnings(sf::st_union(pcon_oas))
     if (inherits(pcon_union, "sfc_GEOMETRYCOLLECTION"))
       pcon_union <- sf::st_collection_extract(pcon_union, "POLYGON")
@@ -407,36 +403,29 @@ server <- function(input, output, session) {
     
     leafletProxy("map") %>%
       addPolygons(
-        data = pcon_sf,
-        group = "pcon",
+        data = pcon_sf, group = "pcon",
         color = "#2b8cbe", weight = 1, opacity = 0.9,
-        fillColor = "#a6cee3", fillOpacity = 0.3,
-        popup = ~paste0("<b>PCON:</b> ", htmltools::htmlEscape(pcon),
-                        "<br><b>OA:</b> ", htmltools::htmlEscape(oa_in))
+        fillColor = "#a6cee3", fillOpacity = 0.3
       ) %>%
       addPolylines(
-        data = pcon_oas,
-        group = "oa_boundaries",
+        data = pcon_oas, group = "oa_boundaries",
         color = "#666666", weight = 1, opacity = 0.8
-      ) 
+      )
     
     if (nrow(sel_oa) == 1) {
       leafletProxy("map") %>%
         addPolygons(
-          data = sel_oa,
-          group = "oa_selected",
+          data = sel_oa, group = "oa_selected",
           color = "#d7301f", weight = 3, opacity = 1.0,
-          fillColor = "#fdae61", fillOpacity = oa_opacity_reactive(),
-          popup = ~paste0("<b>OA:</b> ", htmltools::htmlEscape(oa_in),
-                          "<br><b>PCON:</b> ", htmltools::htmlEscape(pcon))
+          fillColor = "#fdae61", fillOpacity = oa_opacity_reactive()
         )
-      
-      
     }
     
+    ## Save selected geometries for later
+    selected_data$sel_oa  <- sel_oa
+    selected_data$pcon_sf <- pcon_sf
     
-    
-    ## (4) Zoom logic (unchanged; robust centroid buffer, fallback to PCON bbox)
+    ## (4) Zoom logic
     zb <- oa_zoom_box(sel_oa, meters = 2000)
     if (!is.null(zb) && all(is.finite(zb))) {
       logit(sprintf("Zoom (OA centroid-buffer): [%.6f, %.6f, %.6f, %.6f]", zb[1], zb[2], zb[3], zb[4]))
@@ -450,30 +439,27 @@ server <- function(input, output, session) {
       proxy %>% fitBounds(bbp["xmin"], bbp["ymin"], bbp["xmax"], bbp["ymax"])
     }
   })
-}
-
-# When opacity changes (after debounce), update OA polygon fill
-observe({
-  # Wait until OA layer exists
-  op <- oa_opacity_reactive()
-  proxy <- leafletProxy("map")
   
-  # Remove old OA polygon and redraw with new opacity
-  isolate({
-    sel_oa <- try(selected_data$sel_oa, silent = TRUE)
-    if (!inherits(sel_oa, "try-error") && !is.null(sel_oa) && nrow(sel_oa) == 1) {
-      proxy %>%
-        clearGroup("oa_selected") %>%
-        addPolygons(
-          data = sel_oa,
-          group = "oa_selected",
-          color = "#d7301f", weight = 3, opacity = 1.0,
-          fillColor = "#fdae61", fillOpacity = op,
-          popup = ~paste0("<b>OA:</b> ", htmltools::htmlEscape(oa21cd))
-        )
-    }
+  ## ---------------- opacity updater ----------------
+  observe({
+    op <- oa_opacity_reactive()
+    proxy <- leafletProxy("map")
+    isolate({
+      sel_oa <- try(selected_data$sel_oa, silent = TRUE)
+      if (!inherits(sel_oa, "try-error") && !is.null(sel_oa) && nrow(sel_oa) == 1) {
+        proxy %>%
+          clearGroup("oa_selected") %>%
+          addPolygons(
+            data = sel_oa,
+            group = "oa_selected",
+            color = "#d7301f", weight = 3, opacity = 1.0,
+            fillColor = "#fdae61", fillOpacity = op,
+            popup = ~paste0("<b>OA:</b> ", htmltools::htmlEscape(oa21cd))
+          )
+      }
+    })
   })
-})
+}
 
 # =================== Run ===================
 shinyApp(ui, server)
