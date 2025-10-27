@@ -636,7 +636,7 @@ server <- function(input, output, session) {
     ))
   })
   
-
+  
   # ---------------- Print selected OA map (using mapview for better tile handling) ----------------
   output$print_map <- downloadHandler(
     filename = function() {
