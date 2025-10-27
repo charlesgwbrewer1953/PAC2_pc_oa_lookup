@@ -60,6 +60,10 @@ library(webshot2)
 
 
 # =================== Constants ===================
+if (file.exists(".rshinyignore")) {
+  writeLines(c("^data/.*\\.parquet$", "^\\.RData$"), ".rshinyignore")
+}
+
 version_no <- "0.10.0"
 op_status  <- "DEV"
 
@@ -159,10 +163,18 @@ lon_col <- if ("lon" %in% names(ed_raw)) "lon" else if ("longitude" %in% names(e
 ed_slim <- ed_raw %>% select(oa21cd, pcon25cd, all_of(c(lat_col, lon_col)))
 
 # Constituency parquet -> sf (exactly like your working app)
-geo_data <- arrow::read_parquet(GEO_LOCAL)
-geo_sf   <- sf::st_as_sf(geo_data)
-sf::st_crs(geo_sf) <- 4326
-must_have_col(geo_sf, "pcon25cd")
+# ------------------ Lazy geometry loader ------------------
+# Only read the specific PCON geometry when needed
+geo_dataset <- arrow::open_dataset(GEO_LOCAL)
+
+fetch_pcon_geo <- function(pcon_code) {
+  geo_subset <- geo_dataset %>%
+    dplyr::filter(pcon25cd == !!pcon_code) %>%
+    dplyr::select(pcon25cd, pcon25nm, oa21cd, geometry) %>%
+    dplyr::collect() %>%
+    sf::st_as_sf(crs = 4326)
+  return(geo_subset)
+}
 # Prefer human-readable name if present (e.g., pcon25nm or any *nm)
 geo_name_col <- if ("pcon25nm" %in% names(geo_sf)) "pcon25nm" else {
   nm_alt <- grep("nm$", names(geo_sf), value = TRUE)
@@ -473,7 +485,7 @@ server <- function(input, output, session) {
     results_rv(data.frame(OA = oa_in, PCON = pcon, Postcodes = pcs_str, stringsAsFactors = FALSE))
     
     # (3) Geo filter and draw
-    pcon_oas <- dplyr::filter(geo_sf, pcon25cd == pcon)
+    pcon_oas <- fetch_pcon_geo(pcon)
     logit("Geo rows matched in constituency parquet: ", nrow(pcon_oas))
     if (nrow(pcon_oas) == 0) { showNotification(paste("No geometry for PCON:", pcon), type = "error"); return() }
     pcon_oas$geometry <- sf::st_make_valid(pcon_oas$geometry)
