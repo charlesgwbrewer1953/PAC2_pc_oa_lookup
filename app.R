@@ -179,10 +179,11 @@ ui <- fluidPage(
     });
   "))),
   
-  titlePanel("OA locator → PCON map + Postcodes"),
+  titlePanel("OA locator"),
   sidebarLayout(
     sidebarPanel(
       useShinyjs(),
+      helpText("Identifies OA based on OA code or Postcode."),
       textInput(
         inputId = "postcode",
         label   = "Enter Postcode (no spaces)",
@@ -464,9 +465,7 @@ server <- function(input, output, session) {
     })
   })
   
-  # ---------------- Print selected OA map ----------------
-  # ---------------- Print selected OA map (tight crop, no PCON fill) ----------------
-  # ---------------- Print selected OA map (use exact OA bounding box) ----------------
+
   # ---------------- Print selected OA map (using mapview for better tile handling) ----------------
   output$print_map <- downloadHandler(
     filename = function() {
@@ -489,18 +488,42 @@ server <- function(input, output, session) {
       zb <- as.numeric(bb[c("xmin","ymin","xmax","ymax")])
       
       # Title text
+      # title (now includes PCON name + conditional OA/Postcode line)
       df <- try(results_rv(), silent = TRUE)
-      title_text <- if (!inherits(df, "try-error") && nrow(df) > 0) {
-        sprintf("PCON: %s   |   OA: %s", df$PCON[1], df$OA[1])
+      if (!inherits(df, "try-error") && nrow(df) > 0) {
+        pcon_code <- df$PCON[1]
+        # look up pcon25nm if present in geo_sf
+        pcon_name <- tryCatch({
+          nm <- geo_sf$pcon25nm[match(pcon_code, geo_sf$pcon25cd)]
+          if (length(nm) > 0 && !is.na(nm)) nm[1] else NA_character_
+        }, error = function(e) NA_character_)
+        
+        if (identical(selected_data$source, "postcode")) {
+          postcode <- normalize_postcode(input$postcode)
+          title_text <- sprintf(
+            "PCON: %s  |  %s<br>Postcode: %s",
+            htmltools::htmlEscape(pcon_code),
+            htmltools::htmlEscape(pcon_name),
+            htmltools::htmlEscape(postcode)
+          )
+        } else {
+          oa_code <- df$OA[1]
+          title_text <- sprintf(
+            "PCON: %s  |  %s<br>OA: %s",
+            htmltools::htmlEscape(pcon_code),
+            htmltools::htmlEscape(pcon_name),
+            htmltools::htmlEscape(oa_code)
+          )
+        }
       } else {
-        "OA / PCON map"
+        title_text <- "OA / PCON map"
       }
       
       # Build export map using leaflet directly (mapview-compatible style)
       # PCON outline only, OA outline only (no fills)
       export_map <- leaflet(options = leafletOptions(zoomControl = FALSE, attributionControl = FALSE)) %>%
         addProviderTiles(
-          leaflet::providers$CartoDB.Positron,
+          leaflet::providers$OpenStreetMap.Mapnik,
           options = providerTileOptions(
             maxZoom = 19,
             minZoom = 1
@@ -529,7 +552,7 @@ server <- function(input, output, session) {
             "<div style='background:white;padding:8px 12px;font-size:14px;font-weight:bold;
                        border-radius:6px;box-shadow:1px 1px 3px rgba(0,0,0,0.3);'>
              %s
-           </div>", htmltools::htmlEscape(title_text)),
+     </div>", title_text),
           position = "topleft"
         ) %>%
         fitBounds(zb[1], zb[2], zb[3], zb[4])

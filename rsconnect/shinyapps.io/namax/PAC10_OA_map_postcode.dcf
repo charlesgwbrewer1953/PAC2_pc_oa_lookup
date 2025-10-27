@@ -5,7 +5,7 @@ account: namax
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 15410842
-bundleId: 10888937
+bundleId: 11090339
 url: https://namax.shinyapps.io/PAC10_OA_map_postcode/
 version: 1
 asMultiple: FALSE
