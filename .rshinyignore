@@ -1,0 +1,4 @@
+^data/.*\.parquet$
+^\.RData$
+^\.Rhistory$
+^\.git$
