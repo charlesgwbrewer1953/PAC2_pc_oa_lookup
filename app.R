@@ -178,7 +178,9 @@ ui <- fluidPage(
       if (map) { map.invalidateSize(true); }
     });
   "))),
-  
+  tags$head(
+    tags$script(src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js")
+  ),
   titlePanel("OA locator"),
   sidebarLayout(
     sidebarPanel(
@@ -199,6 +201,34 @@ ui <- fluidPage(
       ),
       actionButton("run_lookup", "Run", icon = icon("play")),
       downloadButton("print_map", "Print / Save OA Map"),
+      actionButton("save_png", "Download PNG", icon = icon("download")),
+      tags$script(HTML("
+  Shiny.addCustomMessageHandler('captureMap', function(data) {
+    // Use html2canvas to capture the Leaflet map
+    html2canvas(document.querySelector('#map'), {
+      useCORS: true,
+      scale: 2
+    }).then(function(canvas) {
+      canvas.toBlob(function(blob) {
+        // Create file name
+        const fname = data.filename || 'map.png';
+
+        // 1️⃣ Download locally
+        const link = document.createElement('a');
+        link.download = fname;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+
+        // 2️⃣ Optional: prepare for cloud upload (stub)
+        if (data.cloudUpload) {
+          // Example stub (not executed): send blob to server/cloud
+          // fetch('/upload_cloud', { method: 'POST', body: blob });
+          console.log('Cloud upload placeholder triggered.');
+        }
+      });
+    });
+  });
+")),
       tags$hr(),
       helpText("* Due to the highly variable size of OAs, it may be necessary to resize manually. Use the + / - box to do this.")
     ),
@@ -463,6 +493,20 @@ server <- function(input, output, session) {
           )
       }
     })
+  })
+  
+  ## ---------------- trigger png save ----------------  
+  observeEvent(input$save_png, {
+    df <- isolate(results_rv())
+    oa <- if (nrow(df) > 0 && nzchar(df$OA[1])) df$OA[1] else "OA"
+    pcon <- if (nrow(df) > 0 && nzchar(df$PCON[1])) df$PCON[1] else "PCON"
+    filename <- sprintf("OA_%s_%s.png", oa, format(Sys.Date(), "%Y%m%d"))
+    
+    # Trigger client-side capture
+    session$sendCustomMessage("captureMap", list(
+      filename = filename,
+      cloudUpload = FALSE  # set TRUE when integrating with cloud
+    ))
   })
   
 
