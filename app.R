@@ -170,68 +170,122 @@ geo_name_col <- if ("pcon25nm" %in% names(geo_sf)) "pcon25nm" else {
 }
 
 # =================== UI ===================
+# =================== UI ===================
 ui <- fluidPage(
-  # Force Leaflet to recalc size before zooms
-  tags$head(tags$script(HTML("
-    Shiny.addCustomMessageHandler('leafletInvalidate', function(_) {
-      var map = $('#map').data('leaflet-map');
-      if (map) { map.invalidateSize(true); }
-    });
-  "))),
+  # ---------- Head: scripts and custom JS ----------
   tags$head(
-    tags$script(src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js")
+    # html2canvas library for browser-side PNG capture
+    tags$script(src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"),
+    
+    # Custom handlers: fix map resize + export map PNG
+    tags$script(HTML("
+      // Fix leaflet sizing after re-render
+      Shiny.addCustomMessageHandler('leafletInvalidate', function(_) {
+        var map = $('#map').data('leaflet-map');
+        if (map) { map.invalidateSize(true); }
+      });
+
+      // Handler: export OA map as PNG with correct bounding box and label
+      Shiny.addCustomMessageHandler('exportLeafletMap', function(data) {
+        // Create off-screen container for clean rendering
+        const tempDiv = document.createElement('div');
+        tempDiv.id = 'exportMap';
+        tempDiv.style.width = '1200px';
+        tempDiv.style.height = '900px';
+        tempDiv.style.position = 'absolute';
+        tempDiv.style.left = '-9999px';
+        document.body.appendChild(tempDiv);
+
+        // Create a new Leaflet map
+        const map = L.map('exportMap', {zoomControl:false, attributionControl:false});
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          minZoom: 1
+        }).addTo(map);
+
+        // Copy all visible geometries from main map, but make OA fill transparent
+        const mainMap = $('#map').data('leaflet-map');
+        if (mainMap) {
+          mainMap.eachLayer(function(layer){
+            if (layer.toGeoJSON) {
+              const geo = layer.toGeoJSON();
+              const opts = layer.options || {};
+              const isOA = (layer.options.group === 'oa_selected');
+              L.geoJSON(geo, {
+                color: opts.color || '#555',
+                weight: opts.weight || 1,
+                opacity: opts.opacity || 1,
+                fillColor: opts.fillColor || '#ccc',
+                fillOpacity: isOA ? 0.0 : (opts.fillOpacity || 0)
+              }).addTo(map);
+            }
+          });
+        }
+
+        // Fit the map to the provided OA bounding box
+        if (data.bbox && data.bbox.length === 4) {
+          map.fitBounds([[data.bbox[1], data.bbox[0]], [data.bbox[3], data.bbox[2]]]);
+        }
+
+        // Add title box (PCON + OA/postcode)
+        const label = L.control({position:'topleft'});
+        label.onAdd = function(){
+          const div = L.DomUtil.create('div');
+          div.innerHTML = `<div style='background:white;padding:8px 12px;font-size:14px;font-weight:bold;
+                            border-radius:6px;box-shadow:1px 1px 3px rgba(0,0,0,0.3);line-height:1.3;'>
+                            ${data.title}</div>`;
+          return div;
+        };
+        label.addTo(map);
+
+        // Wait for tiles to load completely, then render to PNG
+        setTimeout(function(){
+          html2canvas(tempDiv, {useCORS:true, scale:2}).then(function(canvas){
+            canvas.toBlob(function(blob){
+              const link = document.createElement('a');
+              link.download = data.filename || 'map.png';
+              link.href = URL.createObjectURL(blob);
+              link.click();
+
+              // Optional cloud upload stub
+              if (data.cloudUpload) {
+                console.log('Cloud upload placeholder triggered.');
+                // e.g. fetch('/upload', {method:'POST', body:blob});
+              }
+
+              // Clean up
+              document.body.removeChild(tempDiv);
+            });
+          });
+        }, 3000); // allow 3 seconds for tile load
+      });
+    "))
   ),
-  titlePanel("OA locator"),
+  
+  # ---------- Title ----------
+  titlePanel("OA locator → PCON map + Postcodes"),
+  
+  # ---------- Layout ----------
   sidebarLayout(
     sidebarPanel(
       useShinyjs(),
-      helpText("Identifies OA based on OA code or Postcode."),
-      textInput(
-        inputId = "postcode",
-        label   = "Enter Postcode (no spaces)",
-        placeholder = "e.g. SW1A1AA"
-      ),
-      helpText("If a postcode is entered, the app will first find the OA for that postcode."),
+      helpText("Identify Output Areas (OAs) and their corresponding Parliamentary Constituencies (PCONs)."),
+      
+      textInput("postcode", "Enter Postcode (no spaces)", placeholder = "e.g. SW1A1AA"),
+      helpText("If a postcode is entered, the app finds the OA for that postcode."),
       textInput("oa_value", "or enter OA code directly:", value = "", placeholder = "e.g. E00092757"),
-      # ADD: OA opacity slider
-      sliderInput(
-        inputId = "oa_opacity",
-        label   = "OA fill opacity",
-        min = 0, max = 1, value = 0.45, step = 0.05
-      ),
-      actionButton("run_lookup", "Run", icon = icon("play")),
-      downloadButton("print_map", "Print / Save OA Map"),
-      actionButton("save_png", "Download PNG", icon = icon("download")),
-      tags$script(HTML("
-  Shiny.addCustomMessageHandler('captureMap', function(data) {
-    // Use html2canvas to capture the Leaflet map
-    html2canvas(document.querySelector('#map'), {
-      useCORS: true,
-      scale: 2
-    }).then(function(canvas) {
-      canvas.toBlob(function(blob) {
-        // Create file name
-        const fname = data.filename || 'map.png';
-
-        // 1️⃣ Download locally
-        const link = document.createElement('a');
-        link.download = fname;
-        link.href = URL.createObjectURL(blob);
-        link.click();
-
-        // 2️⃣ Optional: prepare for cloud upload (stub)
-        if (data.cloudUpload) {
-          // Example stub (not executed): send blob to server/cloud
-          // fetch('/upload_cloud', { method: 'POST', body: blob });
-          console.log('Cloud upload placeholder triggered.');
-        }
-      });
-    });
-  });
-")),
+      
+      # Opacity slider
+      sliderInput("oa_opacity", "OA fill opacity", min = 0, max = 1, value = 0.45, step = 0.05),
+      
+      # Action buttons
+      actionButton("run_lookup", "Run Lookup", icon = icon("play")),
+      actionButton("save_png", "Download OA PNG", icon = icon("download")),
+      
       tags$hr(),
-      helpText("* Due to the highly variable size of OAs, it may be necessary to resize manually. Use the + / - box to do this.")
+      helpText("* OAs vary in size — adjust map zoom with +/– as needed.")
     ),
+    
     mainPanel(
       leafletOutput("map", height = 680),
       tags$hr(),
@@ -497,15 +551,76 @@ server <- function(input, output, session) {
   
   ## ---------------- trigger png save ----------------  
   observeEvent(input$save_png, {
-    df <- isolate(results_rv())
-    oa <- if (nrow(df) > 0 && nzchar(df$OA[1])) df$OA[1] else "OA"
-    pcon <- if (nrow(df) > 0 && nzchar(df$PCON[1])) df$PCON[1] else "PCON"
-    filename <- sprintf("OA_%s_%s.png", oa, format(Sys.Date(), "%Y%m%d"))
+    req(selected_data$sel_oa, selected_data$pcon_sf)
+    sel <- selected_data$sel_oa
+    pcon <- selected_data$pcon_sf
     
-    # Trigger client-side capture
-    session$sendCustomMessage("captureMap", list(
-      filename = filename,
-      cloudUpload = FALSE  # set TRUE when integrating with cloud
+    # Ensure CRS
+    if (is.na(sf::st_crs(sel)))  sf::st_crs(sel)  <- 4326
+    if (is.na(sf::st_crs(pcon))) sf::st_crs(pcon) <- 4326
+    
+    # Defensive: validate geometry
+    sel <- tryCatch(sf::st_make_valid(sel), error = function(e) sel)
+    if (any(sf::st_is_empty(sel))) {
+      showNotification("Selected OA geometry is empty or invalid.", type = "error")
+      return()
+    }
+    
+    # Compute bbox + buffer safely
+    bb <- sf::st_bbox(sel)
+    if (any(!is.finite(bb))) {
+      showNotification("Bounding box not finite.", type = "error")
+      return()
+    }
+    
+    # Choose buffer in meters
+    buf_m <- if (identical(selected_data$source, "postcode")) 100 else 300
+    
+    # Transform safely to metric CRS (3857)
+    bb_sfc <- tryCatch(sf::st_as_sfc(bb, crs = 4326), error = function(e) NULL)
+    if (is.null(bb_sfc)) {
+      showNotification("Failed to build bounding box geometry.", type = "error")
+      return()
+    }
+    
+    bbm <- tryCatch(sf::st_transform(bb_sfc, 3857), error = function(e) NULL)
+    if (is.null(bbm)) {
+      showNotification("Failed to transform bbox to metric CRS.", type = "error")
+      return()
+    }
+    
+    buf <- tryCatch(sf::st_buffer(bbm, dist = buf_m), error = function(e) NULL)
+    if (is.null(buf)) {
+      showNotification("Failed to buffer bbox geometry.", type = "error")
+      return()
+    }
+    
+    bb4326 <- sf::st_bbox(sf::st_transform(buf, 4326))
+    bbox_vals <- as.numeric(bb4326[c("xmin","ymin","xmax","ymax")])
+    
+    # --- Build title text (unchanged) ---
+    df <- isolate(results_rv())
+    pcon_code <- df$PCON[1]
+    pcon_name <- tryCatch({
+      nm <- geo_sf$pcon25nm[match(pcon_code, geo_sf$pcon25cd)]
+      if (length(nm) > 0 && !is.na(nm)) nm[1] else ""
+    }, error = function(e) "")
+    title_html <- sprintf(
+      "PCON: %s  |  %s<br>%s: %s",
+      htmltools::htmlEscape(pcon_code),
+      htmltools::htmlEscape(pcon_name),
+      if (identical(selected_data$source, "postcode")) "Postcode" else "OA",
+      if (identical(selected_data$source, "postcode"))
+        htmltools::htmlEscape(normalize_postcode(input$postcode))
+      else htmltools::htmlEscape(df$OA[1])
+    )
+    
+    # --- Send message to browser for PNG creation ---
+    session$sendCustomMessage("exportLeafletMap", list(
+      bbox = bbox_vals,
+      title = title_html,
+      filename = sprintf("OA_%s_%s.png", df$OA[1], format(Sys.Date(), "%Y%m%d")),
+      cloudUpload = FALSE
     ))
   })
   
